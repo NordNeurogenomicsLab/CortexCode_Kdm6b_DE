@@ -1,0 +1,2713 @@
+---
+title: "CortexCode: identification of dynamic enhancers implicated in cortical deep-layer neuron differentiation and autism spectrum disorder (Under Review)"
+author: |
+  | Athéna R. Ypsilanti, Eirene Markenscoff-Papadimitriou, Sean Whalen, Karol Cichewicz, Kenneth Lim, Shan Dong, Jada Baldoza, Yurong Wang, Matt Barraza, Fadya Binyameen, Diane Dickel, Len Pennachio, Axel Visel, Stephan J. Sanders, Katherine S. Pollard, Alex S. Nord, John Rubenstein
+  | Data analysis by:
+  | Karol Cichewicz, kcichewicz@ucdavis.edu,
+  | Alexander Nord, asnord@ucdavis.edu, [Lab website](https://nordlab.faculty.ucdavis.edu/)
+abstract: |
+    Deciphering the genetic circuitry, including epigenetics and regulatory elements (REs), controlling the development and function of the cortex is essential to understand the aetiology of neuropsychiatric disorders. Here, we define the chromatin accessibility and histone modification landscape at REs across time and differentiation of cortical cell states in mice. Chromatin state at enhancers (H3K27ac and H3K27me3) revealed cell-type specific dynamic epigenomic programming underlying transcriptional activation and repression and were more informative than chromatin accessibility in predicting enhancer activity. We present evidence of epigenetic regulatory principles that are important during transitions of cell states in the process of specifying Layer 6 and Layer 5 excitatory neurons. De-repression by the H3K27 demethylase KDM6B, an autism spectrum disorder (ASD) gene, is a critical step for deep layer neuron specification. Loss of Kdm6b function alters expression of ASD risk genes in neurons. Increased H3K27me3 on REs in Kdm6b mutant neurons have an increased rate in ASD mutations notably around genes with reduced transcription and ASD risk genes.  Discoveries here are foundational to understanding the regulatory logic of cortical development and provide novel insights into the role of mutations in REs contributing to ASD.
+output:
+  html_document:
+    code_folding: hide
+    css: style.css
+    theme: spacelab
+    toc: true
+    toc_depth: 4
+    toc_float: true
+urlcolor: blue
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+
+# Directory structure
+#github_dir <- file.path("G:/Shared drives/Nord Lab - Computational Projects/Kdm6b_bulk_RNAseq")
+github_dir <- file.path("./")
+
+setwd(github_dir)
+
+
+# Global R markdown code chunk options
+knitr::opts_chunk$set(message=FALSE, 
+                      warning = FALSE, 
+                      error=FALSE, 
+                      echo=TRUE, 
+                      fig.width = 7, fig.height = 6, 
+                      fig.align = 'left')
+
+
+```
+
+```{r}
+
+# Libraries
+
+library(DT)
+library(GenomicFeatures)
+library(refGenome) # installed manually from https://cran.r-project.org/src/contrib/Archive/refGenome/
+library(tidyverse)
+library(edgeR)
+library(cowplot)
+library(plotly)
+library(pheatmap)
+library(encryptedRmd)
+library(DT)
+library(pander)
+library(Vennerable)
+library(ggplot2)
+
+```
+
+# 0. Metadata
+
+The RNA-seq was performed at E14.5 on 3 genotypes: wild-type, heterozygotes, and Kdm6b knockouts. 
+This is a cKO model utilizing Emx1-Cre driver which removed Kdm6b from progenitors and their daughters from approximately E10.5.
+Bulk RNA-seq was performed on 2 cell populations: cortical VZ cells sorted by FlashTag+, and cortical non-VZ cells that are FlashTag-.
+There are 4 individuals per genotype per cell type per (4x3x2 = 24 samples).  
+
+Kdm6b is a demethylase that specifically demethylates H3K27me3 which is a repressive epigenetic mark controlling chromatin organization and gene silencing. It is the only demethylase that is expressed in the cortex.
+ 
+```{r}
+
+metadata <- read.csv("metadata.csv", row.names = 1)
+
+knitr::kable(metadata[,c("Sample", "Genotype", "Cells", "Age", "Litter", "sex.by.rna", "Aligned", "Xist_counts")])
+
+```
+
+
+
+# 1. QC and Alignment
+
+## 1.1 FastQC
+```{bash, eval=FALSE}
+
+fastqc \
+--threads 1 \
+--outdir /mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastQC/ \
+/mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastq/Kdm6b*gz
+
+###
+
+fastqc \
+--threads 14 \
+--outdir /mnt/disks/data1/Chd8_genetic_background/fastQC_output \
+/mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastq/Kdm6b*gz
+
+```
+
+
+
+## 1.2 Alignment 
+
+```{bash, eval=FALSE}
+
+# Find unique sample names:
+
+#-rw-rw-r-- 1 kcichewicz kcichewicz  891M Feb  3 21:34 Kdm6b_10minus_het_S16_L001_R1_001.fastq.gz
+#-rw-rw-r-- 1 kcichewicz kcichewicz  981M Feb  3 21:36 Kdm6b_10minus_het_S16_L001_R2_001.fastq.gz
+#-rw-rw-r-- 1 kcichewicz kcichewicz  869M Feb  3 22:25 Kdm6b_10minus_het_S16_L002_R1_001.fastq.gz
+#-rw-rw-r-- 1 kcichewicz kcichewicz  955M Feb  3 22:26 Kdm6b_10minus_het_S16_L002_R2_001.fastq.gz
+
+
+ls /mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastq/Kdm6b*gz | 
+    sed -e 's/\.fastq.gz$//' | 
+    sed -e 's/.*\///' | 
+    sed -e 's/\_R1_001$//' | 
+    sed -e 's/\_R2_001$//' |
+    sed -e 's/\_L001$//' | 
+    sed -e 's/\_L002$//' |
+    uniq
+
+
+# Kdm6b_01minus_het_S13
+# Kdm6b_01plus_het_S1
+# Kdm6b_02minus_het_S14
+# Kdm6b_02plus_het_S2
+# Kdm6b_04minus_het_S15
+# Kdm6b_04plus_het_S3
+# Kdm6b_07minus_mut_S21
+# Kdm6b_07plus_mut_S9
+# Kdm6b_08minus_mut_S22
+# Kdm6b_08plus_mut_S10
+# Kdm6b_09minus_wt_S17
+# Kdm6b_09plus_wt_S5
+# Kdm6b_10minus_het_S16
+# Kdm6b_10plus_het_S4
+# Kdm6b_14minus_mut_S23
+# Kdm6b_14plus_mut_S11
+# Kdm6b_15minus_mut_S24
+# Kdm6b_15plus_mut_S12
+# Kdm6b_18minus_wt_S18
+# Kdm6b_18plus_wt_S6
+# Kdm6b_19minus_wt_S19
+# Kdm6b_19plus_wt_S7
+# Kdm6b_24minus_wt_S20
+# Kdm6b_24plus_wt_S8
+
+
+```
+
+
+```{bash, eval=FALSE}
+
+# Defines an array with sample names:
+
+samples=($(ls /mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastq/Kdm6b*gz | 
+   sed -e 's/\.fastq.gz$//' | 
+    sed -e 's/.*\///' | 
+    sed -e 's/\_R1_001$//' | 
+    sed -e 's/\_R2_001$//' |
+    sed -e 's/\_L001$//' | 
+    sed -e 's/\_L002$//' |
+    uniq))
+
+
+# Array length = 48, sanity check.
+echo "${#samples[@]}"
+
+# First element: echo ${samples[0]}
+# Echo all elements: echo ${samples[@]}
+
+```
+
+
+
+```{bash, eval=FALSE}
+
+# align.sh  script
+
+#! /bin/bash
+
+current_sample=$1
+
+# Create directories
+out_dir="/mnt/disks/data4/Kdm6b_KO_Athena_RNAseq"
+bam_dir="${out_dir}/bam"
+bam_sorted_dir="${out_dir}/bam_sorted_dir"
+
+
+mkdir -p ${out_dir}
+mkdir -p ${bam_dir}
+mkdir -p ${bam_sorted_dir}
+
+
+# STAR #
+reads=/mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastq/
+star_index=/mnt/disks/data2/genomes/Mus_musculus/Ensembl/GRCm38/STAR_index/
+    
+STAR \
+--runMode alignReads \
+--runThreadN 16 \
+--genomeDir $star_index \
+--readFilesCommand gunzip -c \
+--outFileNamePrefix $bam_dir/"$current_sample"_ \
+--outSAMtype BAM SortedByCoordinate \
+--readFilesIn \
+$reads/"$current_sample"_L001_R1_001.fastq.gz,$reads/"$current_sample"_L002_R1_001.fastq.gz \
+$reads/"$current_sample"_L001_R2_001.fastq.gz,$reads/"$current_sample"_L002_R2_001.fastq.gz
+
+
+# Build bam index 1
+java -Xmx100g -jar /mnt/disks/data4/bin/picard.jar BuildBamIndex \
+--INPUT $bam_dir/"$current_sample"_Aligned.sortedByCoord.out.bam
+
+# Sorting w picard. It's probably unnecessary, but doesn't hurt
+java -Xmx100g -jar /mnt/disks/data4/bin/picard.jar SortSam \
+--INPUT $bam_dir/"$current_sample"_Aligned.sortedByCoord.out.bam \
+--OUTPUT $bam_sorted_dir/$current_sample.bam \
+--SORT_ORDER coordinate
+
+# Build bam index 2
+java -Xmx100g -jar /mnt/disks/data4/bin/picard.jar BuildBamIndex \
+--INPUT $bam_sorted_dir/"$current_sample".bam
+
+
+```
+
+```{bash, eval=FALSE}
+
+# Run the pipeline for the first 3 samples
+for i in "${samples[@]:0:2}"; do ./align.sh $i > logs/$i.log.txt 2>&1; done
+
+
+# Run the pipeline for all samples
+for i in "${samples[@]}"; do ./align.sh $i > logs/$i.log.txt 2>&1; done
+
+```
+
+
+
+
+
+```{bash, eval=FALSE}
+
+featureCounts \
+-a /mnt/disks/data2/genomes/Mus_musculus/Ensembl/GRCm38/Annotation/Genes/Mus_musculus.GRCm38.95.gtf \
+-o ./Kdm6b_just_aligned.txt \
+-T 16 \
+-t exon \
+-g gene_id \
+/mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/bam/*.bam
+
+####################################################################################################
+
+featureCounts \
+-a /mnt/disks/data2/genomes/Mus_musculus/Ensembl/GRCm38/Annotation/Genes/Mus_musculus.GRCm38.95.gtf \
+-o ./Kdm6b_sorted.txt \
+-T 16 \
+-t exon \
+-g gene_id \
+/mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/bam_sorted_dir/*.bam
+
+
+```
+
+
+
+
+```{bash, eval=FALSE}
+
+## 1.3 Read counts in fastq files
+
+samples=($(ls /mnt/disks/data4/Kdm6b_KO_Athena_RNAseq/fastq/Kdm6b*gz))
+
+
+# Array length = 48, sanity check.
+echo "${#samples[@]}"
+
+# First element: echo ${samples[0]}
+# Echo all elements: echo ${samples[@]}
+
+
+for i in "${samples[@]}"; do echo $(zcat $i | wc -l)/4|bc; done |
+echo "${samples[@]}" | for i in "${samples[@]}"; do echo $(zcat $i | wc -l)/4|bc; done
+
+for i in "${samples[@]}"; do echo $(zcat $i | wc -l)/4|bc; done >> raw_counts.txt
+
+
+# Limit the range of samples
+for i in "${samples[@]:70:98}"; do echo $(zcat $i | wc -l)/4|bc; done >> raw_counts2.txt
+```
+
+```{r}
+
+raw_counts <- read.csv("raw_read_counts.csv")
+raw_counts <- merge(metadata, raw_counts)
+
+library(tidyverse)
+
+n_of_frag <- raw_counts %>%
+  group_by(Sample) %>%
+  summarise(fragments = sum(Number.of.reads)/2)
+
+n_of_frag <- as.data.frame(n_of_frag)
+
+n_of_frag <- merge(metadata, n_of_frag)
+
+n_of_frag$Genotype <- factor(n_of_frag$Genotype, levels = c("WT", "Het", "Mut"))
+
+raw_counts_p <- ggplot(n_of_frag, aes(x = Sample, y = (fragments*2) / 10^6, color = Cells))+
+  #geom_bar(position = "dodge",  stat="identity", color="black")+
+  geom_point()+
+  theme_bw()+
+  labs(x = "", y = "Raw read counts [millions]", title = "Raw read counts")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  facet_wrap(~Genotype, scale = "free_x")
+
+#raw_counts_p
+```
+
+
+## 1.3 Aligned and raw read counts
+
+```{r}
+
+# These files are corrupted. Recover them
+
+calculate_colSums <- function(data_file){
+    
+data <- read.table(data_file, header = T)
+
+colnames(data)[7:30] <- gsub("X.mnt.disks.data4.Kdm6b_KO_Athena_RNAseq.bam_sorted_dedup_dir.", "", colnames(data)[7:30])
+colnames(data)[7:30] <- gsub(".bam", "", colnames(data)[7:30])
+
+
+as.data.frame(colSums(data[7:30]))
+
+}
+
+
+df <- data.frame(
+calculate_colSums("./count_matrix/Kdm6b_just_aligned.txt"),
+calculate_colSums("./count_matrix/Kdm6b_sorted.txt")
+)
+
+rownames(df) <- gsub("X.mnt.disks.data4.Kdm6b_KO_Athena_RNAseq.", "", rownames(df))
+rownames(df) <- gsub("_Aligned.sortedByCoord.out", "", rownames(df))
+
+colnames(df) <- c("Aligned", "Sorted")
+
+df$Sample <- rownames(df)
+rownames(df) <- NULL
+
+df <- df[,c(3,1:2)]
+
+
+
+df <- merge(n_of_frag, df)
+
+df$Frac_Aligned <- round(df$Aligned / (df$fragments*2), 3)
+
+```
+
+
+```{r}
+
+aligned_counts_p <- ggplot(df, aes(x = Sample, y = Aligned/ 10^6, color = Cells))+
+  #geom_bar(position = "dodge",  stat="identity", color="black")+
+  geom_point()+
+  theme_bw()+
+  labs(x = "", y = "Aligned read counts [millions]", title = "Aligned read counts")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  facet_wrap(~Genotype, scales = "free_x")
+
+```
+
+```{r, fig.width=10, fig.height=12}
+
+plot_grid(
+    raw_counts_p,
+    aligned_counts_p,
+    ncol = 1
+)
+
+```
+
+
+# 2. Data QC
+
+## 2.1 Multidimensional scaling (MDS) analysis
+
+```{r}
+
+data <- read.table("./count_matrix/Kdm6b_just_aligned.txt", header = T)
+
+colnames(data)[7:30] <- gsub("X.mnt.disks.data4.Kdm6b_KO_Athena_RNAseq.", "", colnames(data)[7:30])
+colnames(data)[7:30] <- gsub("bam.", "", colnames(data)[7:30])
+colnames(data)[7:30] <- gsub("_Aligned.sortedByCoord.out", "", colnames(data)[7:30])
+colnames(data)[7:30] <- gsub(".bam", "", colnames(data)[7:30])
+
+#head(data)
+
+# Remove samples with low counts
+remove <- c("Kdm6b_01plus_het_S1", "Kdm6b_18minus_wt_S18")
+
+# These files are not present in the metadata already. They were removed when VZ/nonVZ assignment was corrected. 
+data <- select(data, -c("Kdm6b_01plus_het_S1", "Kdm6b_18minus_wt_S18"))
+metadata <- metadata[!metadata$Sample %in% remove,]
+
+```
+
+
+```{r}
+
+min.cpm.criteria = 1
+
+test.data <- data[, 7:28]
+rownames(test.data) <- data$Geneid
+
+test.samples <- 1:nrow(metadata)
+min.cpm <- min.cpm.criteria
+
+y <- DGEList(counts=test.data, group=metadata$Genotype)
+keep <- rowSums(cpm(y)>min.cpm) >=2 #keeps only genes expressed in above min.cpm in at least 2 samples 
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- calcNormFactors(y) # Normalizes for RNA composition
+y <- estimateCommonDisp(y) # Estimates common dispersions. Calculates pseudo-counts, a type of normalized counts. 
+y <- estimateTagwiseDisp(y) #Estimates dispersions. 
+
+
+#metadata <- arrange(metadata, counts_colnames)
+
+#MDS plot using ggplot.
+MDS_data1 <- plotMDS(y, plot = FALSE, dim.plot = c(1, 2))
+MDS_data2 <- plotMDS(y, plot = FALSE, dim.plot = c(3, 4))
+MDS_data3 <- plotMDS(y, plot = FALSE, dim.plot = c(5, 6))
+MDS_data4 <- plotMDS(y, plot = FALSE, dim.plot = c(7, 8))
+MDS_data5 <- plotMDS(y, plot = FALSE, dim.plot = c(9, 10))
+
+MDS_data2 <- data.frame(Leading_logFC_dim_1 = MDS_data1$x, 
+                        Leading_logFC_dim_2 = MDS_data1$y,
+                        Leading_logFC_dim_3 = MDS_data2$x, 
+                        Leading_logFC_dim_4 = MDS_data2$y,
+                        Leading_logFC_dim_5 = MDS_data3$x, 
+                        Leading_logFC_dim_6 = MDS_data3$y,
+                        Leading_logFC_dim_7 = MDS_data4$x, 
+                        Leading_logFC_dim_8 = MDS_data4$y,
+                        Leading_logFC_dim_9 = MDS_data5$x, 
+                        Leading_logFC_dim_10 = MDS_data5$y)
+
+MDS_data2 <- data.frame(Samples=rownames(MDS_data1$distance.matrix.squared), MDS_data2, metadata)
+
+#Sanity check
+#all(MDS_data2$Samples == MDS_data2$counts_colnames)
+
+rownames(MDS_data2) <- NULL
+MDS_data2$Genotype <- as.factor(MDS_data2$Genotype)
+
+```
+
+
+```{r}
+
+point_size = 3
+
+MDS_plot_12 <- function(variable){
+  ggplot(MDS_data2, aes(x=Leading_logFC_dim_1, 
+                        y=Leading_logFC_dim_2, 
+                        colour=get(variable), 
+                        shape=Genotype,
+                        label = Samples))+
+  geom_point(size=point_size, alpha=0.6)+
+  theme_bw()+
+  labs(title = "MDS plot", color = variable)+
+  theme(plot.title = element_text(size = rel(1.2), hjust=0.5))+
+  theme(axis.text.x = element_text(size=12), text = element_text(size=12))+
+  theme(legend.position = "bottom")
+
+}
+
+
+MDS_plot_34 <- function(variable){
+  ggplot(MDS_data2, aes(x=Leading_logFC_dim_3, 
+                        y=Leading_logFC_dim_4, 
+                        colour=get(variable), 
+                        shape=Genotype,
+                        label = Samples))+
+  geom_point(size=point_size, alpha=0.6)+
+  theme_bw()+
+  labs(title = "MDS plot", color = variable)+
+  theme(plot.title = element_text(size = rel(1.2), hjust=0.5))+
+  theme(axis.text.x = element_text(size=12), text = element_text(size=12))+
+  theme(legend.position = "bottom")
+
+}
+```
+
+
+* VZ vs non-VZ stratification is explained by Dim1.    
+* Litter is explained by Dim2.   
+* Sex is explained by Dim3.   
+
+```{r, fig.width=10, fig.height=8}
+
+plot_grid(MDS_plot_12("Cells"),
+          MDS_plot_12("Litter"),
+          MDS_plot_12("Genotype"),
+          MDS_plot_12("sex.by.rna"))
+
+
+plot_grid(MDS_plot_34("Cells"),
+          MDS_plot_34("Litter"),
+          MDS_plot_34("Genotype"),
+          MDS_plot_34("sex.by.rna"))
+
+```
+
+
+
+## 2.2. Samples sex from Xist
+
+There are 5 male samples and 17 female samples
+
+```{r}
+
+library(parallel)
+
+# Calculates exonic gene sizes and reads GTF file
+
+#library(GenomicFeatures)
+
+# installed manually from https://cran.r-project.org/src/contrib/Archive/refGenome/  :/
+#library(refGenome)
+
+
+# The output is loaded from a file to speed up report generation
+if(file.exists("my_gene_annotation.RDS")){
+  
+  my_gene <- readRDS("my_gene_annotation.RDS")
+  
+} else {
+
+
+# create ensemblGenome object for storing Ensembl genomic annotation data
+ens <- ensemblGenome()
+
+# read GTF file into ensemblGenome object. Must be in wd() - strange
+read.gtf(ens, "Mus_musculus.GRCm38.95.gtf")
+
+my_gene <- getGenePositions(ens) # dataframe with corresponding gene_id, gene_name, and other annotations
+
+}
+
+# Merge with count data like this:
+ counts2 <- merge(my_gene[,c("gene_id", "gene_name")], data, 
+                 by.x = "gene_id", by.y = "Geneid", all = T)
+
+```
+
+
+```{r}
+
+# Qualifies F or M based on the Xist expression
+
+Xist <- filter(counts2, gene_name == "Xist")[,df$Sample]
+
+sex.by.rna <- c(ifelse(Xist >1000, "F","M")) #
+
+Xist_exp <- as.data.frame(reshape2::melt(Xist))
+Xist_exp <- cbind(Xist_exp, sex.by.rna)
+Xist_exp <- arrange(Xist_exp, value)
+colnames(Xist_exp) <- c("Sample", "Xist_counts", "sex.by.rna")
+
+
+df <- merge(df, Xist_exp)
+
+
+ggplot(df, aes(x=sex.by.rna, y=Xist_counts, colour=Genotype, shape = Cells, group = sex.by.rna))+
+  geom_jitter()+
+  geom_boxplot(alpha=0.2)+
+  theme_bw()+
+  labs(title="Xist read counts", x = "", y = "Read counts")+
+  theme(plot.title = element_text(size = rel(2), hjust=0.5))+
+  scale_x_discrete(breaks= c("F", "M"), labels=c("Females", "Males"))+
+  facet_wrap(.~Cells)
+    
+
+```
+
+## 2.3. RPKM plots
+
+```{r}
+
+exp.data <- counts2[,c("gene_id", df$Sample)]
+rownames(exp.data) <- exp.data$gene_id 
+exp.data$gene_id <- NULL
+
+# Calculates RPKM values
+# Gene lengths calculated with lapply
+
+#### 1.st retrieve exonic.gene.sizes ####
+
+#txdb <- makeTxDbFromGFF("G:/Shared drives/Nord Lab - Computational Projects/CHD807/Mus_musculus.GRCm38.95.gtf", format="gtf")
+#exons.list.per.gene <- exonsBy(txdb, by="gene")
+
+# Parallelized, increasing the speed >2x on a 4-core (logical) machine. 
+# Use mclapply instead of parLapply if you use a Mac.
+#cl <- makeCluster(detectCores())
+#exonic.gene.sizes <- parallel::parLapply(cl, exons.list.per.gene,function(x){sum(width(reduce(x)))})
+#stopCluster(cl)
+
+#### 2nd. Calculate gene lengths ####
+#gene.lengths <- as.numeric(lapply(1:nrow(exp.data), function(x) FUN= #as.numeric(exonic.gene.sizes[rownames(exp.data)[x]])))
+#names(gene.lengths) <- rownames(exp.data)
+
+#saveRDS(gene.lengths, file= "gene_lengths.RDS")
+
+gene.lengths = readRDS("gene_lengths.RDS")
+
+# 1. Confirm if gene names match between objects
+#all(names(gene.lengths) == data$Geneid) # FALSE !!!They don't match between the original data and gene lengths!!!
+#all(names(gene.lengths) == rownames(exp.data)) # TRUE
+ # This is not a problem, just something to keep in mind. They don't match because of merging with the annotation at some point.
+
+# The original data object, has Length column from featureCounts.
+# 2. Confirm that gene length match when ordered correctly
+#all(data$Length == gene.lengths[data$Geneid])  # TRUE
+
+
+rpkm.data <- rpkm(exp.data, gene.length=gene.lengths, log=TRUE)  # Using the default prior count of 2
+rpkm.data_linear <- rpkm(exp.data, gene.length=gene.lengths, log=F)
+
+#all(counts2$gene_id == rownames(rpkm.data_linear))    # TRUE
+#all(rownames(exp.data) == rownames(rpkm.data_linear)) # TRUE
+#all(data$Geneid == rownames(rpkm.data_linear))        #  but FALSE, move on! :)
+
+
+write.csv(rpkm.data, file = "rpkm_log2_54838.csv")
+write.csv(rpkm.data_linear, file = "rpkm_linear_54838.csv")
+
+```
+
+```{r}
+
+df$Cells <- factor(df$Cells, levels = c("VZ_cells", "non_VZ_cells"))
+df$sex.by.rna <- factor(df$sex.by.rna, levels = c("M", "F"))
+
+rpkm_box_plot <- function(x, y){
+    
+rownames(rpkm.data_linear) <- counts2$gene_name
+    
+rpkm_test <- as.data.frame(reshape2::melt(rpkm.data_linear[x,]))
+rpkm_test <- data.frame(df, "RPKM" = rpkm_test$value)
+
+j_brew_colors <- brewer.pal(n = 8, name = "Paired")[c(6,2)]
+
+
+
+ggplot(rpkm_test, aes(x = Genotype, y= RPKM, colour=Cells))+
+  geom_jitter(size=2, width = 0.2, alpha = 0.5, aes(shape = sex.by.rna))+
+  geom_boxplot(alpha=0, position="identity", size = 0.2)+
+  
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=0, vjust=0.9, hjust=1, size=14))+
+  theme(axis.text.y=element_text(size=12))+
+  theme(axis.title.y=element_text(size=14))+
+  labs(title= y, x="")+
+  theme(plot.title = element_text(size = rel(2), hjust=0.5))+
+  scale_color_manual(values = j_brew_colors)+
+  theme(legend.position = "bottom")+
+    facet_wrap(~Cells)
+
+}
+
+```
+
+```{r}
+
+#rpkm.data <- read.csv("rpkm_log2_54838.csv")
+#rpkm.data_linear <- read.csv("rpkm_linear_54838.csv")    
+    
+```
+
+
+```{r, eval=FALSE}
+
+# Sample groups from RPKM hierarchical clustering identified in earlier iteration of this analysis. They correspond to true VZ vs Non vz division + Litter. Metadata already includes this info.  Plots are not shown here. 
+
+#group1 <- c("Kdm6b_02minus_het_S14",
+#            "Kdm6b_08minus_mut_S22",
+#            "Kdm6b_07minus_mut_S21",
+#            "Kdm6b_09minus_wt_S17",
+#            "Kdm6b_01minus_het_S13",
+#            "Kdm6b_04minus_het_S15")
+
+#group2 <- c("Kdm6b_14minus_mut_S23",
+#            "Kdm6b_15minus_mut_S24",
+#            "Kdm6b_10minus_het_S16",
+#           "Kdm6b_19minus_wt_S19",
+#            "Kdm6b_24minus_wt_S20")
+
+#group3 <- c("Kdm6b_10plus_het_S4",
+#            "Kdm6b_14plus_mut_S11",
+#            "Kdm6b_19plus_wt_S7",
+#            "Kdm6b_18plus_wt_S6",
+#            "Kdm6b_15plus_mut_S12",
+#            "Kdm6b_24plus_wt_S8")
+
+
+#group4 <- c("Kdm6b_02plus_het_S2",
+#            "Kdm6b_08plus_mut_S10",
+#            "Kdm6b_04plus_het_S3",
+#            "Kdm6b_07plus_mut_S9",
+#            "Kdm6b_09plus_wt_S5")
+
+
+#df$Batch_from_heatmap <- ifelse(df$Sample %in% group1, "group1", "")
+#df$Batch_from_heatmap <- ifelse(df$Sample %in% group2, "group2", df$Batch_from_heatmap)
+#df$Batch_from_heatmap <- ifelse(df$Sample %in% group3, "group3", df$Batch_from_heatmap)
+#df$Batch_from_heatmap <- ifelse(df$Sample %in% group4, "group4", df$Batch_from_heatmap)
+
+#df$Batch_from_heatmap <- factor(df$Batch_from_heatmap)
+
+# Litter assignment from communication with Athena. Let's double check if it makes sense in PCA.
+#df$Litter <- factor(ifelse(df$Batch_from_heatmap %in% c("group1", "group4"), "Litter_1", "Litter_2"),
+#                    levels = c("Litter_1", "Litter_2"))
+
+# Correct metadata file
+#colnames(df)[which(colnames(df) == "Cells")] <- "Cells_original_incorrect"
+
+
+#colnames(df)[which(colnames(df) == "Cells_corrected")] <- "Cells"
+
+#write.csv(df, file = "metadata.csv")
+
+```
+
+
+## 2.4 Principal component analysis (PCA)
+
+PCA is redundant with MDS. It also demonstrate batch effects:     
+* PC1 and PC3/PC4 explain Litters   
+* PC2 explains VZ vs non-VZ cell type
+
+```{r, fig.width=10, fig.height=8}
+
+# I'm using linear RPKM values as PCA input
+
+# PCA plot
+pca.results <- prcomp(scale(log(rpkm.data_linear + 1), 
+                            center=T, scale=T)) # It is a good idea to scale your variables. Otherwise the magnitude to certain variables dominates the associations between the variables in the sample.
+
+b <- data.frame(df,
+                pca.results$rotation)
+rownames(b) <- NULL
+
+
+#PCA plot
+PCA_plot_12 <- function(PCx, PCy, variable){ 
+  ggplot(b, aes(x=get(PCx), y=get(PCy), color = get(variable), shape=Cells))+
+  geom_point(size=3, alpha=0.6, aes(shape=Cells))+
+  theme_bw()+
+  labs(title = "PCA plot", x = PCx, y = PCy)+
+  theme(plot.title = element_text(size = rel(1.5), hjust=0.5))
+}
+
+plot_grid(
+    PCA_plot_12("PC1", "PC2", "Cells"),
+    PCA_plot_12("PC1", "PC2", "Litter"),
+    PCA_plot_12("PC1", "PC2", "sex.by.rna"),
+    PCA_plot_12("PC1", "PC2", "Genotype")
+    )
+
+```
+
+
+```{r, fig.width=10, fig.height=8}
+
+plot_grid(
+    PCA_plot_12("PC3", "PC4", "Cells"),
+    PCA_plot_12("PC3", "PC4", "Litter"),
+    #PCA_plot_12("PC1", "PC4", "Batch_from_heatmap"),
+    PCA_plot_12("PC3", "PC4", "sex.by.rna"),
+    PCA_plot_12("PC3", "PC4", "Genotype")
+    )
+
+
+```
+
+
+```{r}
+
+#calculate total variance explained by each principal component
+var_explained = pca.results$sdev^2 / sum(pca.results$sdev^2)
+
+var_explained <- data.frame("PC" =  1:22,
+                            "var_explained" = var_explained)
+
+#create scree plot
+library(ggplot2)
+
+ggplot(var_explained, aes(x = PC, y = var_explained)) + 
+  geom_point()+
+  geom_line() + 
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  labs(title = "Scree Plot",
+       subtitle = "PC1 explains 92%, PC2 explains 4.6%, and PC3 expalins 0.8% of the variance")+
+  ylim(0, 1)
+
+```
+
+
+```{r, eval=FALSE}
+
+### 2.4 RPKM expression histogram
+
+### This histogram can be used for removign genes with low expression. I decided to allow edgeR to trim the gene set uisng the CPM threshold 
+dfl <- reshape2::melt(rpkm.data)
+dfl$rpkm_linear <- 2^dfl$value # This converts the log2 RPKM values back to linear scale
+colnames(dfl) <- c("gene_name", "sample", "rpkm_log2","rpkm_linear")
+
+# Histogram of all rpkm values in a dataset.
+ggplot(dfl, aes(x=rpkm_log2))+ 
+  geom_histogram(bins = 1000, color="black")+
+  theme_bw()+
+  labs(title="Unfiltered dataset of 54838 genes", 
+       x="log2 RPKM", y = "Read counts")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#####
+
+```
+
+
+# 3. Expression of Kdm6b, maker genes, and Kdm6b sashimi plots
+
+* Sashimi plots confirm deletion of 4 alleles in the mutant, and 50% reduction in the Het.
+
+```{r, fig.width=10, fig.height=8}
+
+library(RColorBrewer)
+
+plot_grid(
+    rpkm_box_plot("Kdm6b", "Kdm6b"),
+    rpkm_box_plot("Pax6", "Pax6"),
+    rpkm_box_plot("Tbr1", "Tbr1"),
+    rpkm_box_plot("Eomes", "Eomes")
+)
+
+
+# save.image("G:/Shared drives/Nord Lab - Computational Projects/Kdm6b_bulk_RNAseq/rpkm_gene_plotting_workspace_temp.RData")
+
+```
+
+
+![WT vs Mut sashimi plot](./WT_vz_Mut_sashimi_plot.jpg)
+
+
+![WT vs Het sashimi plot](./WT_vz_Het_sashimi_plot.jpg)
+
+
+
+# 4. DE analysis - simple models
+
+DE analysis presented in the manuscript includes litter and sex covariate.
+
+## 4.1 VZ vs non-VZ DE - all samples
+
+This is is simple model without any covriates.   
+DE on genes with CPM > 1 in at least 2 samples. 
+```{r}
+
+# Use exp.data object for all DE testing
+
+min.cpm.criteria <- 1
+min.cpm <- min.cpm.criteria
+
+# Overfitting?? 
+#design <- model.matrix(~as.factor(df$Genotype) + as.factor(df$sex.by.rna) + as.factor(df$Litter) + as.factor(df$Cells))
+
+# simple model
+design <- model.matrix(~ as.factor(df$Cells))
+
+# Colnames sanity check
+# all(colnames(exp.data) == df$Sample)   # TRUE
+
+y <- DGEList(counts=exp.data, group= as.factor(df$Cells))
+keep <- rowSums(cpm(y)>min.cpm) >= 2 #keeps only genes expressed in above min.cpm in at least 2 libraries in each group 
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- estimateGLMCommonDisp(y,design)
+y <- estimateGLMTrendedDisp(y,design)
+y <- estimateGLMTagwiseDisp(y,design)
+fit <- glmFit(y,design) 
+lrt <- glmLRT(fit) # Genewise Negative Binomial Generalized Linear Models.
+
+glm.output <- topTags(lrt, n=Inf)
+glm.output.full <- glm.output$table
+
+glm.output.full$gene_name <- rownames(glm.output.full)
+rownames(glm.output.full) <- NULL
+glm.output.full <- glm.output.full[,c(6,1:5)]
+
+colnames(glm.output.full) <- c("gene_id", "logFC", "logCPM", "LR", "PValue", "FDR")
+
+glm.output.full <- merge(my_gene[,c("gene_id", "gene_name")], 
+      glm.output.full, by.x = "gene_id", by.y = "gene_id", all.y = T)      
+
+
+VZ_vs_nonVZ_DE <- arrange(glm.output.full, FDR)
+
+
+# dim(VZ_vs_nonVZ_DE)
+# table(VZ_vs_nonVZ_DE$FDR < 0.01)
+# FALSE  TRUE 
+#  6178  9379 
+
+# filter(VZ_vs_nonVZ_DE, gene_name == "Pax6")
+#             gene_id gene_name     logFC   logCPM      LR       PValue          FDR
+# 1 ENSMUSG00000027168      Pax6 -2.952582 8.003536 151.161 9.664782e-35 1.838081e-33
+```
+
+
+
+
+
+
+
+
+Genes in red are upregulated in VZ
+```{r, fig.width=10, fig.height=8}
+
+library(ggrepel)
+
+source("volcano_plot_text_2.R")
+source("volcano_plot_text.R")
+
+
+volcano_plot_text_2(VZ_vs_nonVZ_DE, title = "VZ vs nonVZ DE across all genotypes")
+
+```
+
+
+```{r}
+
+datatable(head(VZ_vs_nonVZ_DE, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+## 4.2 VZ vs non-VZ DE - only WT samples
+
+Another simple model without covariates. These VZ vz non-VZ DE results are sanity checks, confirming successful cell sorting. 
+
+```{r}
+
+# Sanity check
+# df$Sample %in% colnames(exp.data)
+
+# 4 vs 3 sample comparison   
+#control.datapoints <- dplyr::filter(df, Cells == "VZ_cells", Genotype  == #"WT")$Sample
+#test.datapoints <- dplyr::filter(df, Cells == "non_VZ_cells", Genotype  == #"WT")$Sample
+
+use.cols <- dplyr::filter(df, Genotype  == "WT")$Sample
+
+# Filter metadata
+df_test <- filter(df, Sample %in% use.cols)
+
+# Subset exp.data, using the Sample column from metadata
+test.data <- exp.data[,df_test$Sample]
+
+# Define test.group using subsetted metadata
+test.group <- df_test$Cells
+
+# Sanity check
+#colnames(test.data) == df_test$Sample
+
+
+min.cpm.criteria <- 1
+min.cpm <- min.cpm.criteria
+
+
+# I' using a simple model to avoid overfitting in a comparison of 4 vs 4 samples
+design <- model.matrix(~ as.factor(test.group))
+
+#design <- model.matrix(~ as.factor(test.group))
+y <- DGEList(counts=test.data, group=test.group)
+keep <- rowSums(cpm(y)>min.cpm) >= 2 #keeps only genes expressed in above min.cpm in at least 2 libraries in each group 
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- estimateGLMCommonDisp(y,design)
+y <- estimateGLMTrendedDisp(y,design)
+y <- estimateGLMTagwiseDisp(y,design)
+fit <- glmFit(y,design) 
+lrt <- glmLRT(fit) # Genewise Negative Binomial Generalized Linear Models.
+
+glm.output <- topTags(lrt, n=Inf)
+glm.output.full <- glm.output$table
+
+glm.output.full$gene_name <- rownames(glm.output.full)
+rownames(glm.output.full) <- NULL
+glm.output.full <- glm.output.full[,c(6,1:5)]
+
+colnames(glm.output.full) <- c("gene_id", "logFC", "logCPM", "LR", "PValue", "FDR")
+
+glm.output.full <- merge(my_gene[,c("gene_id", "gene_name")], 
+      glm.output.full, by.x = "gene_id", by.y = "gene_id", all.y = T)
+
+VZ_vs_nonVZ_DE_WT_samples <- arrange(glm.output.full, PValue)
+
+
+#dim(VZ_vs_nonVZ_DE_WT_samples)
+
+```
+
+
+
+Genes in red are upregulated in VZ
+```{r, fig.width=10, fig.height=8}
+
+library(ggrepel)
+
+source("volcano_plot_text_2.R")
+source("volcano_plot_text.R")
+
+volcano_plot_text_2(VZ_vs_nonVZ_DE_WT_samples, "VZ vs nonVZ DE, WT samples")
+
+```
+
+
+```{r}
+
+datatable(head(VZ_vs_nonVZ_DE_WT_samples, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+
+## 4.3 WT vs Het - Combined VZ and non-VZ cells
+
+* Positive fold change indicates upregulation relative to WT.
+* Negative fold change indicates downregulation relative to WT.
+```{r}
+
+# Sanity check
+# df$Sample %in% colnames(counts2)
+
+pairwise_DE <- function(x, y, cells){
+
+# x <- "WT"
+# y <- "Het"
+# cells <- "non_VZ_cells"
+          
+control.datapoints <- dplyr::filter(df, 
+                                    Genotype == x, 
+                                    Cells %in% cells)$Sample
+
+test.datapoints <- dplyr::filter(df, 
+                                 Genotype == y, 
+                                 Cells %in% cells)$Sample
+# Define samples to use in DE
+use.cols <- c(control.datapoints, test.datapoints)
+
+# Filter metadata
+df_test <- filter(df, Sample %in% use.cols)
+
+# Subset exp.data, using the Sample column from metadata
+test.data <- exp.data[,df_test$Sample]
+
+# Make sure the subseted metadata and test.data match in columns 
+data_metadata_order_sanity_check <- all(colnames(test.data) == df_test$Sample) # TRUE
+
+# Define test.group using subsetted metadata
+test.group <- df_test$Genotype
+test.group <- factor(as.character(test.group), levels = c(x, y))
+
+
+y <- DGEList(counts=test.data, group=as.factor(test.group))  #
+
+min.cpm.criteria <- 1
+min.cpm <- min.cpm.criteria
+
+
+design <- model.matrix(~ as.factor(test.group))
+
+y <- DGEList(counts=test.data, group=test.group)
+keep <- rowSums(cpm(y)>min.cpm) >=2 #keeps only genes expressed in above min.cpm in at least 2 libraries in each group 
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- estimateGLMCommonDisp(y,design)
+y <- estimateGLMTrendedDisp(y,design)
+y <- estimateGLMTagwiseDisp(y,design)
+fit <- glmFit(y,design) 
+lrt <- glmLRT(fit) # Genewise Negative Binomial Generalized Linear Models.
+
+glm.output <- topTags(lrt, n=Inf)
+glm.output.full <- glm.output$table
+
+glm.output.full$gene_name <- rownames(glm.output.full)
+rownames(glm.output.full) <- NULL
+glm.output.full <- glm.output.full[,c(6,1:5)]
+
+colnames(glm.output.full) <- c("gene_id", "logFC", "logCPM", "LR", "PValue", "FDR")
+
+glm.output.full <- merge(my_gene[,c("gene_id", "gene_name")], 
+      glm.output.full, by.x = "gene_id", by.y = "gene_id", all.y = T)
+
+list(arrange(glm.output.full, FDR), data_metadata_order_sanity_check)
+
+}
+
+wt_het_DE <- pairwise_DE("WT", "Het", c("non_VZ_cells", "VZ_cells"))
+wt_mut_DE <- pairwise_DE("WT", "Mut", c("non_VZ_cells", "VZ_cells"))
+
+wt_het_VZ_DE <- pairwise_DE("WT", "Het", c("VZ_cells"))
+wt_mut_VZ_DE <- pairwise_DE("WT", "Mut", c("VZ_cells"))
+
+wt_het_nonVZ_DE <- pairwise_DE("WT", "Het", c("non_VZ_cells"))
+wt_mut_nonVZ_DE <- pairwise_DE("WT", "Mut", c("non_VZ_cells"))
+
+# Check sample assignment test
+#wt_het_DE[[2]]
+#wt_mut_DE[[2]]
+
+#wt_het_VZ_DE[[2]]
+#wt_mut_VZ_DE[[2]]
+
+#wt_het_nonVZ_DE[[2]]
+#wt_mut_nonVZ_DE[[2]]
+
+
+# Droop assignment tests
+wt_het_DE <- wt_het_DE[[1]]
+wt_mut_DE <- wt_mut_DE[[1]]
+
+wt_het_VZ_DE <- wt_het_VZ_DE[[1]]
+wt_mut_VZ_DE <- wt_mut_VZ_DE[[1]]
+
+wt_het_nonVZ_DE <- wt_het_nonVZ_DE[[1]]
+wt_mut_nonVZ_DE <- wt_mut_nonVZ_DE[[1]]
+
+```
+
+```{r}
+
+source("volcano_plot_text_2.R")
+source("volcano_plot_text.R")
+
+
+#volcano_plot_text_2(wt_het_DE, title = "WT vs Het DE across all genotypes")
+
+```
+
+
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_het_DE, "WT vs Het DE, Combined VZ and non VZ cells")
+
+```
+
+
+
+Top 500 genes: 
+```{r}
+
+datatable(head(wt_het_DE, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+## 4.4 WT vs Mut - combined VA and non-VZ cells
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_mut_DE, "WT vs Mut DE, Combined VZ and non VZ cells")
+
+```
+
+
+```{r}
+
+datatable(head(wt_mut_DE, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+## 4.5 WT vs Het - VZ cells
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_het_VZ_DE, "WT vs Het DE, VZ cells")
+
+```
+
+
+```{r}
+
+datatable(head(wt_het_VZ_DE, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="500px", searching = FALSE))
+
+```
+
+
+
+
+
+## 4.6 WT vs Mut - VZ cells
+
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_mut_VZ_DE, "WT vs Mut DE, VZ cells")
+
+```
+
+ 
+
+```{r}
+
+datatable(head(wt_mut_VZ_DE, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+
+## 4.7 WT vs Het - non-VZ cells
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_het_nonVZ_DE, "WT vs Het DE, Non VZ cells")
+
+```
+
+```{r}
+
+datatable(head(wt_het_nonVZ_DE, 500), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+## 4.8 WT vs Mut - non-VZ cells
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_mut_nonVZ_DE, "WT vs Mut DE, Non VZ cells")
+
+```
+
+```{r}
+
+datatable(head(wt_mut_nonVZ_DE, 500),
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+## 4.9 DE analysis global patterns
+
+### 4.9.1 Numbers of DE genes
+```{r}
+
+fdr_threshold = 0.05
+
+combined_wt_het_P_up <- length(dplyr::filter(wt_het_DE, PValue < 0.05, logFC > 0)$gene_name)
+combined_wt_het_P_down <- length(dplyr::filter(wt_het_DE, PValue < 0.05, logFC < 0)$gene_name)
+
+combined_wt_het_FDR_up <- length(dplyr::filter(wt_het_DE, 
+                                            FDR < fdr_threshold, logFC > 0)$gene_name)
+combined_wt_het_FDR_down <- length(dplyr::filter(wt_het_DE, 
+                                            FDR < fdr_threshold, logFC < 0)$gene_name)
+
+####
+combined_wt_mut_P_up <- length(dplyr::filter(wt_mut_DE, PValue < 0.05, logFC > 0)$gene_name)
+combined_wt_mut_P_down <- length(dplyr::filter(wt_mut_DE, PValue < 0.05, logFC < 0)$gene_name)
+
+combined_wt_mut_FDR_up <- length(dplyr::filter(wt_mut_DE, 
+                                               FDR < fdr_threshold, logFC > 0)$gene_name)
+combined_wt_mut_FDR_down <- length(dplyr::filter(wt_mut_DE, 
+                                               FDR < fdr_threshold, logFC < 0)$gene_name)
+
+#################
+
+VZ_wt_het_P_up <- length(dplyr::filter(wt_het_VZ_DE, PValue < 0.05, logFC > 0)$gene_name)
+VZ_wt_het_P_down <- length(dplyr::filter(wt_het_VZ_DE, PValue < 0.05, logFC < 0)$gene_name)
+
+VZ_wt_het_FDR_up <- length(dplyr::filter(wt_het_VZ_DE, 
+                                         FDR < fdr_threshold, logFC > 0)$gene_name)
+VZ_wt_het_FDR_down <- length(dplyr::filter(wt_het_VZ_DE, 
+                                         FDR < fdr_threshold, logFC < 0)$gene_name)
+
+####
+VZ_wt_mut_P_up <- length(dplyr::filter(wt_mut_VZ_DE, PValue < 0.05, logFC > 0)$gene_name)
+VZ_wt_mut_P_down <- length(dplyr::filter(wt_mut_VZ_DE, PValue < 0.05, logFC < 0)$gene_name)
+
+VZ_wt_mut_FDR_up <- length(dplyr::filter(wt_mut_VZ_DE, 
+                                         FDR < fdr_threshold, logFC > 0)$gene_name)
+VZ_wt_mut_FDR_down <- length(dplyr::filter(wt_mut_VZ_DE, 
+                                         FDR < fdr_threshold, logFC < 0)$gene_name)
+
+#################
+
+nonVZ_wt_het_P_up <- length(dplyr::filter(wt_het_nonVZ_DE, PValue < 0.05, logFC > 0)$gene_name)
+nonVZ_wt_het_P_down <- length(dplyr::filter(wt_het_nonVZ_DE, PValue < 0.05, logFC < 0)$gene_name)
+
+nonVZ_wt_het_FDR_up <- length(dplyr::filter(wt_het_nonVZ_DE, 
+                                        FDR < fdr_threshold, logFC > 0)$gene_name)
+nonVZ_wt_het_FDR_down <- length(dplyr::filter(wt_het_nonVZ_DE, 
+                                        FDR < fdr_threshold, logFC < 0)$gene_name)
+
+####
+nonVZ_wt_mut_P_up <- length(dplyr::filter(wt_mut_nonVZ_DE, PValue < 0.05, logFC > 0)$gene_name)
+nonVZ_wt_mut_P_down <- length(dplyr::filter(wt_mut_nonVZ_DE, PValue < 0.05, logFC < 0)$gene_name)
+
+nonVZ_wt_mut_FDR_up <- length(dplyr::filter(wt_mut_nonVZ_DE, 
+                                        FDR < fdr_threshold, logFC > 0)$gene_name)
+nonVZ_wt_mut_FDR_down <- length(dplyr::filter(wt_mut_nonVZ_DE, 
+                                        FDR < fdr_threshold, logFC < 0)$gene_name)
+
+
+```
+
+
+
+```{r}
+
+DE_df_n <- t(data.frame(
+           "Combined" =c(combined_wt_het_P_up, combined_wt_het_P_down, combined_wt_het_FDR_up, combined_wt_het_FDR_down, 
+                         combined_wt_mut_P_up, combined_wt_mut_P_down, combined_wt_mut_FDR_up, combined_wt_mut_FDR_down),
+           
+           "VZ cells" =c(VZ_wt_het_P_up, VZ_wt_het_P_down, VZ_wt_het_FDR_up, VZ_wt_het_FDR_down, 
+                         VZ_wt_mut_P_up, VZ_wt_mut_P_down, VZ_wt_mut_FDR_up, VZ_wt_mut_FDR_down),
+           
+           "Non VZ cells" =c(nonVZ_wt_het_P_up, nonVZ_wt_het_P_down, nonVZ_wt_het_FDR_up, nonVZ_wt_het_FDR_down,
+                         nonVZ_wt_mut_P_up, nonVZ_wt_mut_P_down, nonVZ_wt_mut_FDR_up, nonVZ_wt_mut_FDR_down)))
+
+
+
+
+colnames(DE_df_n) <- c("Upregulated_wt_het_P", "Downregulated_wt_het_P", "Upregulated_wt_het_FDR", "Downregulated_wt_het_FDR",
+                       "Upregulated_wt_mut_P", "Downregulated_wt_mut_P", "Upregulated_wt_mut_FDR", "Downregulated_wt_mut_FDR")
+
+
+DE_df_n_melted <- reshape2::melt(DE_df_n)
+
+DE_df_n_melted$stat <- c(rep(", P < 0.05", 6), rep(", FDR < 0.05", 6), rep(", P < 0.05", 6), rep(", FDR < 0.05", 6))
+DE_df_n_melted$Var2_stat <- paste(DE_df_n_melted$Var2, DE_df_n_melted$stat)
+
+DE_df_n_melted$comparison <- c(rep("WT_vs_Het", 12), rep("WT_vs_Mut", 12))
+
+```
+
+
+```{r, fig.width=14, fig.height=6}
+
+ggplot(DE_df_n_melted, aes(fill=Var2_stat, group=Var2, x=Var1, y=value))+
+  geom_bar(position = "dodge",  stat="identity", color="black")+
+  theme_bw()+
+  #scale_fill_manual(values=brewer.pal(n = 8, name = "Paired")[c(6,6,2,2 )])+
+  scale_fill_manual(values=c(
+"Upregulated_wt_het_P , P < 0.05" ="#eb5e60",     
+"Upregulated_wt_het_P , P < 0.05" ="#eb5e60",     
+"Upregulated_wt_het_P , P < 0.05" ="#eb5e60",     
+
+"Downregulated_wt_het_P , P < 0.05" = "#62a0ca",    
+"Downregulated_wt_het_P , P < 0.05" = "#62a0ca",   
+"Downregulated_wt_het_P , P < 0.05" = "#62a0ca",    
+
+"Upregulated_wt_het_FDR , FDR < 0.05" = "#960304", 
+"Upregulated_wt_het_FDR , FDR < 0.05" = "#960304", 
+"Upregulated_wt_het_FDR , FDR < 0.05" = "#960304",
+
+"Downregulated_wt_het_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_het_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_het_FDR , FDR < 0.05" = "#1F78B4",
+
+"Upregulated_wt_mut_P , P < 0.05" ="#eb5e60",      
+"Upregulated_wt_mut_P , P < 0.05" ="#eb5e60",     
+"Upregulated_wt_mut_P , P < 0.05" ="#eb5e60",     
+
+"Downregulated_wt_mut_P , P < 0.05" = "#62a0ca",    
+"Downregulated_wt_mut_P , P < 0.05" = "#62a0ca",    
+"Downregulated_wt_mut_P , P < 0.05" = "#62a0ca",   
+
+"Upregulated_wt_mut_FDR , FDR < 0.05" = "#960304",  
+"Upregulated_wt_mut_FDR , FDR < 0.05" = "#960304", 
+"Upregulated_wt_mut_FDR , FDR < 0.05" = "#960304", 
+
+"Downregulated_wt_mut_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_mut_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_mut_FDR , FDR < 0.05" = "#1F78B4"))+
+
+  theme(legend.title=element_blank())+
+  labs(title="Number of DE genes with P < 0.05 and FDR < 0.05", x="", y="")+
+  theme(plot.title = element_text(size = rel(1.2), hjust=0.5))+
+  geom_text(aes(label=value), position=position_dodge(width=0.9), hjust= 0.5, vjust = -0.5, angle = 270)+
+  coord_flip()+
+  scale_x_discrete(limits = rev(levels(DE_df_n_melted$Var1)))+
+  theme(panel.border = element_blank(),
+        #legend.key = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(angle = 90, size = 14, face = "bold", 
+                                   hjust = 0.5, vjust = -4),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(legend.position="bottom")+
+  facet_wrap(~comparison)
+
+
+```
+
+**Conclusions:**
+
+
+### 4.9.2 Sample splits 
+
+#### 4.9.2.1 By Genotype and Cell type
+```{r}
+
+library(tidyverse)
+library(knitr)
+
+genotype_cell_split <- df %>%
+    group_by(Genotype, Cells) %>%
+    summarise(n=n())
+
+knitr::kable(as.data.frame(genotype_cell_split))
+
+```
+
+#### 4.9.2.2 By Genotype, Cell type, and Sex
+```{r}
+
+library(tidyverse)
+library(knitr)
+
+genotype_cell_split <- df %>%
+    group_by(Genotype, Cells, sex.by.rna) %>%
+    summarise(n=n())
+
+knitr::kable(as.data.frame(genotype_cell_split))
+
+```
+
+
+### 4.9.3 Heatmaps
+
+#### 4.9.3.1 Random 1000 genes
+
+* Samples are strongly clustered by VZ/non-VZ cell type, and by litter. 
+
+```{r}
+
+rpkm.data <- read.csv("rpkm_log2_54838.csv")
+#rpkm.data_linear <- read.csv("rpkm_linear_54838.csv")    
+
+# Work zone
+rpkm.data$gene_id <- rpkm.data$X
+
+set.seed(1234)
+heatmap_m <- as.matrix(filter(as.data.frame(rpkm.data), gene_id %in% sample(rpkm.data$gene_id, 1000))[,2:23])
+
+#pheatmap(heatmap_m)
+
+anno <- df[,c("Genotype", "Cells", "sex.by.rna", "Litter")]
+
+rownames(anno) <- colnames(heatmap_m)
+
+pheatmap(heatmap_m, 
+         show_rownames = FALSE, 
+         clustering_distance_rows="euclidean", 
+         cex=1,
+         clustering_distance_cols="euclidean", 
+         clustering_method="complete", 
+         border_color=FALSE,
+         annotation_col = anno,
+         main = "Random 1000 genes [log2 RPKM]")
+```
+
+
+#### 4.9.3.2  Non-VZ DE genes, FDR < 0.1 nad logFC > or < 0.5
+
+Cells and Litter are the major drivers of sample clustering.
+
+```{r, fig.width=10, fig.height=8}
+
+nonVZ_wt_het_P_up <- dplyr::filter(wt_het_nonVZ_DE, FDR < 0.1, logFC > 0.5)$gene_name
+nonVZ_wt_het_P_down <- dplyr::filter(wt_het_nonVZ_DE, FDR < 0.1, logFC < -0.5)$gene_name
+
+####
+nonVZ_wt_mut_P_up <- dplyr::filter(wt_mut_nonVZ_DE, FDR < 0.1, logFC > 0.5)$gene_name
+nonVZ_wt_mut_P_down <- dplyr::filter(wt_mut_nonVZ_DE, FDR < 0.1, logFC < -0.5)$gene_name
+
+
+# Non VZ gene set
+DE_gene_set <- unique(c(nonVZ_wt_het_P_up, nonVZ_wt_het_P_down, nonVZ_wt_mut_P_up, nonVZ_wt_mut_P_down))    
+DE_gene_set <- filter(my_gene, gene_name %in% DE_gene_set)$gene_id
+
+
+rpkm.data <- read.csv("rpkm_log2_54838.csv")
+#rpkm.data_linear <- read.csv("rpkm_linear_54838.csv")    
+
+# Work zone
+rpkm.data$gene_id <- rpkm.data$X
+rownames(rpkm.data) <- rpkm.data$gene_id
+
+heatmap_m <- as.matrix(filter(as.data.frame(rpkm.data), gene_id %in% DE_gene_set)[,2:23])
+
+#pheatmap(heatmap_m)
+
+anno <- df[,c("Genotype", "Cells", "sex.by.rna", "Litter")]
+
+rownames(anno) <- colnames(heatmap_m)
+
+
+
+pheatmap(heatmap_m, 
+         show_rownames = FALSE, 
+         clustering_distance_rows="euclidean", 
+         cex=1,
+         clustering_distance_cols="euclidean", 
+         clustering_method="complete", 
+         border_color=FALSE,
+         annotation_col = anno,
+         main = "Non VZ DE genes, FDR < 0.05, logFC >0.5 or <-0.5, scaled by rows [log2 RPKM]",
+         scale = "row")
+
+```
+
+
+Samples strongly cluster by litters 
+```{r, fig.width=10, fig.height=8}
+
+#filter(df, Cells == "VZ_cells")$Sample
+
+pheatmap(heatmap_m[,filter(df, Cells == "non_VZ_cells")$Sample], 
+         show_rownames = FALSE, 
+         clustering_distance_rows="euclidean", 
+         cex=1,
+         clustering_distance_cols="euclidean", 
+         clustering_method="complete", 
+         border_color=FALSE,
+         annotation_col = anno,
+         main = "Non VZ DE genes, FDR < 0.05, logFC > 0.5 or < -0.5, scaled by rows  [log2 RPKM]",
+        scale = "row")
+
+
+```
+
+
+
+# 5. Litter and sex corrected DE
+
+DE included covariates for Sex and Litter.     
+The combined model also includes Cell, VZ/Non-VZ covariate.      
+
+```{r}
+
+
+pairwise_DE_cor_w_cell_cor <- function(x, y){
+
+# x <- "WT"
+# y <- "Het"
+
+control.datapoints <- dplyr::filter(df, 
+                                    Genotype == x)$Sample
+
+test.datapoints <- dplyr::filter(df, 
+                                 Genotype == y)$Sample
+# Define samples to use in DE
+use.cols <- c(control.datapoints, test.datapoints)
+
+# Filter metadata
+df_test <- filter(df, Sample %in% use.cols)
+
+# Subset exp.data, using the Sample column from metadata
+test.data <- exp.data[,df_test$Sample]
+
+# Make sure the subseted metadata and test.data match in columns 
+data_metadata_order_sanity_check <- all(colnames(test.data) == df_test$Sample) # TRUE
+
+# Define test.group using subsetted metadata
+test.group <- df_test$Genotype
+test.group <- factor(as.character(test.group), levels = c(x, y))
+
+
+y <- DGEList(counts=test.data, group=as.factor(test.group))  #
+
+min.cpm.criteria <- 1
+min.cpm <- min.cpm.criteria
+
+
+design <- model.matrix(~ as.factor(df_test$Cells)+ as.factor(df_test$sex.by.rna) + as.factor(df_test$Litter) + as.factor(test.group))
+
+y <- DGEList(counts=test.data, group=test.group)
+keep <- rowSums(cpm(y)>min.cpm) >=2 #keeps only genes expressed in above min.cpm in at least 2 libraries in each group 
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- estimateGLMCommonDisp(y,design)
+y <- estimateGLMTrendedDisp(y,design)
+y <- estimateGLMTagwiseDisp(y,design)
+fit <- glmFit(y,design) 
+lrt <- glmLRT(fit) # Genewise Negative Binomial Generalized Linear Models.
+
+glm.output <- topTags(lrt, n=Inf)
+glm.output.full <- glm.output$table
+
+glm.output.full$gene_name <- rownames(glm.output.full)
+rownames(glm.output.full) <- NULL
+glm.output.full <- glm.output.full[,c(6,1:5)]
+
+colnames(glm.output.full) <- c("gene_id", "logFC", "logCPM", "LR", "PValue", "FDR")
+
+glm.output.full <- merge(my_gene[,c("gene_id", "gene_name")], 
+      glm.output.full, by.x = "gene_id", by.y = "gene_id", all.y = T)
+
+list(arrange(glm.output.full, FDR), data_metadata_order_sanity_check)
+
+}
+
+```
+
+
+
+```{r}
+
+pairwise_DE_cor <- function(x, y, cells){
+
+# x <- "WT"
+# y <- "Het"
+# cells <- "non_VZ_cells"
+          
+control.datapoints <- dplyr::filter(df, 
+                                    Genotype == x, 
+                                    Cells %in% cells)$Sample
+
+test.datapoints <- dplyr::filter(df, 
+                                 Genotype == y, 
+                                 Cells %in% cells)$Sample
+# Define samples to use in DE
+use.cols <- c(control.datapoints, test.datapoints)
+
+# Filter metadata
+df_test <- filter(df, Sample %in% use.cols)
+
+# Subset exp.data, using the Sample column from metadata
+test.data <- exp.data[,df_test$Sample]
+
+# Make sure the subseted metadata and test.data match in columns 
+data_metadata_order_sanity_check <- all(colnames(test.data) == df_test$Sample) # TRUE
+
+# Define test.group using subsetted metadata
+test.group <- df_test$Genotype
+test.group <- factor(as.character(test.group), levels = c(x, y))
+
+
+y <- DGEList(counts=test.data, group=as.factor(test.group))  #
+
+min.cpm.criteria <- 1
+min.cpm <- min.cpm.criteria
+
+
+design <- model.matrix(~ as.factor(df_test$sex.by.rna) + as.factor(df_test$Litter) + as.factor(test.group))
+
+y <- DGEList(counts=test.data, group=test.group)
+keep <- rowSums(cpm(y)>min.cpm) >=2 #keeps only genes expressed in above min.cpm in at least 2 libraries in each group 
+y <- y[keep, , keep.lib.sizes=FALSE]
+y <- estimateGLMCommonDisp(y,design)
+y <- estimateGLMTrendedDisp(y,design)
+y <- estimateGLMTagwiseDisp(y,design)
+fit <- glmFit(y,design) 
+lrt <- glmLRT(fit) # Genewise Negative Binomial Generalized Linear Models.
+
+glm.output <- topTags(lrt, n=Inf)
+glm.output.full <- glm.output$table
+
+glm.output.full$gene_name <- rownames(glm.output.full)
+rownames(glm.output.full) <- NULL
+glm.output.full <- glm.output.full[,c(6,1:5)]
+
+colnames(glm.output.full) <- c("gene_id", "logFC", "logCPM", "LR", "PValue", "FDR")
+
+glm.output.full <- merge(my_gene[,c("gene_id", "gene_name")], 
+      glm.output.full, by.x = "gene_id", by.y = "gene_id", all.y = T)
+
+list(arrange(glm.output.full, FDR), data_metadata_order_sanity_check)
+
+}
+```
+
+
+```{r}
+
+wt_het_Cells_Litter_Sex_cor <- pairwise_DE_cor_w_cell_cor("WT", "Het")
+wt_mut_Cells_Litter_Sex_cor <- pairwise_DE_cor_w_cell_cor("WT", "Mut")
+
+wt_het_VZ_DE_Litter_Sex_cor <- pairwise_DE_cor("WT", "Het", c("VZ_cells"))
+wt_mut_VZ_DE_Litter_Sex_cor <- pairwise_DE_cor("WT", "Mut", c("VZ_cells"))
+
+wt_het_nonVZ_DE_Litter_Sex_cor <- pairwise_DE_cor("WT", "Het", c("non_VZ_cells"))
+wt_mut_nonVZ_DE_Litter_Sex_cor <- pairwise_DE_cor("WT", "Mut", c("non_VZ_cells"))
+
+
+# Check sample assignment test
+
+#wt_het_Cells_Litter_Sex_cor[[2]]
+#wt_mut_Cells_Litter_Sex_cor[[2]]
+
+#wt_het_VZ_DE_Litter_Sex_cor[[2]]
+#wt_mut_VZ_DE_Litter_Sex_cor[[2]]
+
+#wt_het_nonVZ_DE_Litter_Sex_cor[[2]]
+#wt_mut_nonVZ_DE_Litter_Sex_cor[[2]]
+
+
+# Droop assignment tests
+wt_het_Cells_Litter_Sex_cor <- wt_het_Cells_Litter_Sex_cor[[1]]
+wt_mut_Cells_Litter_Sex_cor <- wt_mut_Cells_Litter_Sex_cor[[1]]
+
+wt_het_VZ_DE_Litter_Sex_cor <- wt_het_VZ_DE_Litter_Sex_cor[[1]]
+wt_mut_VZ_DE_Litter_Sex_cor <- wt_mut_VZ_DE_Litter_Sex_cor[[1]]
+
+wt_het_nonVZ_DE_Litter_Sex_cor <- wt_het_nonVZ_DE_Litter_Sex_cor[[1]]
+wt_mut_nonVZ_DE_Litter_Sex_cor <- wt_mut_nonVZ_DE_Litter_Sex_cor[[1]]
+
+
+```
+
+
+
+
+```{r}
+
+fdr_threshold = 0.05
+
+combined_wt_het_P_up <- length(dplyr::filter(wt_het_Cells_Litter_Sex_cor, PValue < 0.05, logFC > 0)$gene_name)
+combined_wt_het_P_down <- length(dplyr::filter(wt_het_Cells_Litter_Sex_cor, PValue < 0.05, logFC < 0)$gene_name)
+
+combined_wt_het_FDR_up <- length(dplyr::filter(wt_het_Cells_Litter_Sex_cor, 
+                                               FDR < fdr_threshold, logFC > 0)$gene_name)
+combined_wt_het_FDR_down <- length(dplyr::filter(wt_het_Cells_Litter_Sex_cor, 
+                                                 FDR < fdr_threshold, logFC < 0)$gene_name)
+
+####
+combined_wt_mut_P_up <- length(dplyr::filter(wt_mut_Cells_Litter_Sex_cor, PValue < 0.05, logFC > 0)$gene_name)
+combined_wt_mut_P_down <- length(dplyr::filter(wt_mut_Cells_Litter_Sex_cor, PValue < 0.05, logFC < 0)$gene_name)
+
+combined_wt_mut_FDR_up <- length(dplyr::filter(wt_mut_Cells_Litter_Sex_cor, 
+                                               FDR < fdr_threshold, logFC > 0)$gene_name)
+combined_wt_mut_FDR_down <- length(dplyr::filter(wt_mut_Cells_Litter_Sex_cor, 
+                                                 FDR < fdr_threshold, logFC < 0)$gene_name)
+
+#################
+
+VZ_wt_het_P_up <- length(dplyr::filter(wt_het_VZ_DE_Litter_Sex_cor, PValue < 0.05, logFC > 0)$gene_name)
+VZ_wt_het_P_down <- length(dplyr::filter(wt_het_VZ_DE_Litter_Sex_cor, PValue < 0.05, logFC < 0)$gene_name)
+
+VZ_wt_het_FDR_up <- length(dplyr::filter(wt_het_VZ_DE_Litter_Sex_cor, 
+                                         FDR < fdr_threshold, logFC > 0)$gene_name)
+VZ_wt_het_FDR_down <- length(dplyr::filter(wt_het_VZ_DE_Litter_Sex_cor, 
+                                           FDR < fdr_threshold, logFC < 0)$gene_name)
+
+####
+VZ_wt_mut_P_up <- length(dplyr::filter(wt_mut_VZ_DE_Litter_Sex_cor, PValue < 0.05, logFC > 0)$gene_name)
+VZ_wt_mut_P_down <- length(dplyr::filter(wt_mut_VZ_DE_Litter_Sex_cor, PValue < 0.05, logFC < 0)$gene_name)
+
+VZ_wt_mut_FDR_up <- length(dplyr::filter(wt_mut_VZ_DE_Litter_Sex_cor, 
+                                         FDR < fdr_threshold, logFC > 0)$gene_name)
+VZ_wt_mut_FDR_down <- length(dplyr::filter(wt_mut_VZ_DE_Litter_Sex_cor, 
+                                           FDR < fdr_threshold, logFC < 0)$gene_name)
+
+#################
+
+nonVZ_wt_het_P_up <- length(dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, PValue < 0.05, logFC > 0)$gene_name)
+nonVZ_wt_het_P_down <- length(dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, PValue < 0.05, logFC < 0)$gene_name)
+
+nonVZ_wt_het_FDR_up <- length(dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, 
+                                            FDR < fdr_threshold, logFC > 0)$gene_name)
+nonVZ_wt_het_FDR_down <- length(dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, 
+                                            FDR < fdr_threshold, logFC < 0)$gene_name)
+
+####
+nonVZ_wt_mut_P_up <- length(dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, PValue < 0.05, logFC > 0)$gene_name)
+nonVZ_wt_mut_P_down <- length(dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, PValue < 0.05, logFC < 0)$gene_name)
+
+nonVZ_wt_mut_FDR_up <- length(dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, 
+                                            FDR < fdr_threshold, logFC > 0)$gene_name)
+nonVZ_wt_mut_FDR_down <- length(dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, 
+                                              FDR < fdr_threshold, logFC < 0)$gene_name)
+
+```
+
+
+
+```{r}
+
+DE_df_n <- t(data.frame(
+           "Combined" =c(combined_wt_het_P_up, combined_wt_het_P_down, combined_wt_het_FDR_up, combined_wt_het_FDR_down, 
+                         combined_wt_mut_P_up, combined_wt_mut_P_down, combined_wt_mut_FDR_up, combined_wt_mut_FDR_down),
+           
+           "VZ cells" =c(VZ_wt_het_P_up, VZ_wt_het_P_down, VZ_wt_het_FDR_up, VZ_wt_het_FDR_down, 
+                         VZ_wt_mut_P_up, VZ_wt_mut_P_down, VZ_wt_mut_FDR_up, VZ_wt_mut_FDR_down),
+           
+           "Non VZ cells" =c(nonVZ_wt_het_P_up, nonVZ_wt_het_P_down, nonVZ_wt_het_FDR_up, nonVZ_wt_het_FDR_down,
+                         nonVZ_wt_mut_P_up, nonVZ_wt_mut_P_down, nonVZ_wt_mut_FDR_up, nonVZ_wt_mut_FDR_down)))
+
+
+
+
+colnames(DE_df_n) <- c("Upregulated_wt_het_P", "Downregulated_wt_het_P", "Upregulated_wt_het_FDR", "Downregulated_wt_het_FDR",
+                       "Upregulated_wt_mut_P", "Downregulated_wt_mut_P", "Upregulated_wt_mut_FDR", "Downregulated_wt_mut_FDR")
+
+
+DE_df_n_melted <- reshape2::melt(DE_df_n)
+
+DE_df_n_melted$stat <- c(rep(", P < 0.05", 6), rep(", FDR < 0.05", 6), rep(", P < 0.05", 6), rep(", FDR < 0.05", 6))
+DE_df_n_melted$Var2_stat <- paste(DE_df_n_melted$Var2, DE_df_n_melted$stat)
+
+DE_df_n_melted$comparison <- c(rep("WT_vs_Het", 12), rep("WT_vs_Mut", 12))
+
+```
+
+
+```{r, fig.width=14, fig.height=6}
+
+ggplot(DE_df_n_melted, aes(fill=Var2_stat, group=Var2, x=Var1, y=value))+
+  geom_bar(position = "dodge",  stat="identity", color="black")+
+  theme_bw()+
+  #scale_fill_manual(values=brewer.pal(n = 8, name = "Paired")[c(6,6,2,2 )])+
+  scale_fill_manual(values=c(
+"Upregulated_wt_het_P , P < 0.05" ="#eb5e60",     
+"Upregulated_wt_het_P , P < 0.05" ="#eb5e60",     
+"Upregulated_wt_het_P , P < 0.05" ="#eb5e60",     
+
+"Downregulated_wt_het_P , P < 0.05" = "#62a0ca",    
+"Downregulated_wt_het_P , P < 0.05" = "#62a0ca",   
+"Downregulated_wt_het_P , P < 0.05" = "#62a0ca",    
+
+"Upregulated_wt_het_FDR , FDR < 0.05" = "#960304", 
+"Upregulated_wt_het_FDR , FDR < 0.05" = "#960304", 
+"Upregulated_wt_het_FDR , FDR < 0.05" = "#960304",
+
+"Downregulated_wt_het_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_het_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_het_FDR , FDR < 0.05" = "#1F78B4",
+
+"Upregulated_wt_mut_P , P < 0.05" ="#eb5e60",      
+"Upregulated_wt_mut_P , P < 0.05" ="#eb5e60",     
+"Upregulated_wt_mut_P , P < 0.05" ="#eb5e60",     
+
+"Downregulated_wt_mut_P , P < 0.05" = "#62a0ca",    
+"Downregulated_wt_mut_P , P < 0.05" = "#62a0ca",    
+"Downregulated_wt_mut_P , P < 0.05" = "#62a0ca",   
+
+"Upregulated_wt_mut_FDR , FDR < 0.05" = "#960304",  
+"Upregulated_wt_mut_FDR , FDR < 0.05" = "#960304", 
+"Upregulated_wt_mut_FDR , FDR < 0.05" = "#960304", 
+
+"Downregulated_wt_mut_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_mut_FDR , FDR < 0.05" = "#1F78B4",
+"Downregulated_wt_mut_FDR , FDR < 0.05" = "#1F78B4"))+
+
+  theme(legend.title=element_blank())+
+  labs(title="Number of DE genes with P < 0.05 and FDR < 0.05", x="", y="")+
+  theme(plot.title = element_text(size = rel(1.2), hjust=0.5))+
+  geom_text(aes(label=value), position=position_dodge(width=0.9), hjust= 0.5, vjust = -0.5, angle = 270)+
+  coord_flip()+
+  scale_x_discrete(limits = rev(levels(DE_df_n_melted$Var1)))+
+  theme(panel.border = element_blank(),
+        #legend.key = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(angle = 90, size = 14, face = "bold", 
+                                   hjust = 0.5, vjust = -4),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(legend.position="bottom")+
+  facet_wrap(~comparison)
+
+
+```
+
+
+
+## 5.1 Combined VZ and Non VZ cells
+
+### 5.1.1 WT vs Het
+
+This model includes covariates for Cell type, Sex, and Litter. It may be overfitted.
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_het_Cells_Litter_Sex_cor, "WT vs Het DE, Combined VZ and non VZ cells")
+
+```
+
+ 
+
+```{r}
+
+datatable(dplyr::filter(wt_het_Cells_Litter_Sex_cor, PValue < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+### 5.1.2 WT vs Mut
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_mut_Cells_Litter_Sex_cor, "WT vs Mut DE, Combined VZ and non VZ cells")
+
+```
+
+
+
+```{r}
+
+datatable(dplyr::filter(wt_mut_Cells_Litter_Sex_cor, PValue < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+## 5.2 VZ cells
+
+### 5.2.1 WT vs Het
+
+This model is corrected for Litter and Sex
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_het_VZ_DE_Litter_Sex_cor, "WT vs Het DE, VZ cells")
+
+```
+
+
+```{r}
+
+datatable(dplyr::filter(wt_het_VZ_DE_Litter_Sex_cor, PValue < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+
+### 5.2.2 WT vs Mut
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_mut_VZ_DE_Litter_Sex_cor, "WT vs Mut DE, VZ cells")
+
+```
+
+
+```{r}
+
+datatable(dplyr::filter(wt_mut_VZ_DE_Litter_Sex_cor, PValue < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+
+
+## 5.3 Non-VZ cells
+
+### 5.3.1 WT vs Het
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_het_nonVZ_DE_Litter_Sex_cor, "WT vs Het DE, Non VZ cells")
+
+```
+
+
+
+```{r}
+
+datatable(dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, PValue < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+
+
+### 5.3.2 WT vs Mut
+
+```{r, fig.width=10, fig.height=8}
+
+volcano_plot_text_2(wt_mut_nonVZ_DE_Litter_Sex_cor, "WT vs Mut DE, Non VZ cells")
+
+```
+
+
+```{r}
+
+datatable(dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, PValue < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+```{r, eval=FALSE}
+
+# Save DE tables
+### VZ ###
+#write.csv(wt_het_VZ_DE_Litter_Sex_cor, file = "./DE_tables/VZ_wt_vs_het_DE_Litter_Sex_cor.csv")
+#write.csv(wt_mut_VZ_DE_Litter_Sex_cor, file = "./DE_tables/VZ_wt_vs_mut_DE_Litter_Sex_cor.csv")
+
+
+### nonVZ ###
+#write.csv(wt_het_nonVZ_DE_Litter_Sex_cor, file = "./DE_tables/nonVZ_wt_vs_het_DE_Litter_Sex_cor.csv")
+#write.csv(wt_mut_nonVZ_DE_Litter_Sex_cor, file = "./DE_tables/nonVZ_wt_vs_mut_DE_Litter_Sex_cor.csv")
+
+#write.csv(VZ_vs_nonVZ_DE, file = "./DE_tables/VZ_vs_nonVZ_DE_NO_Covariates.csv")
+#write.csv(VZ_vs_nonVZ_DE_WT_samples, file = "./DE_tables/VZ_vs_nonVZ_WT_samples_DE_NO_Covariates.csv")
+
+```
+
+# 6. Non-VZ signature
+
+
+```{r}
+
+#wt_het_nonVZ_DE_Litter_Sex_cor <- read.csv("./DE_tables/nonVZ_wt_vs_het_DE_Litter_Sex_cor.csv")
+#wt_mut_nonVZ_DE_Litter_Sex_cor <- read.csv("./DE_tables/nonVZ_wt_vs_mut_DE_Litter_Sex_cor.csv")
+
+
+fdr_threshold = 0.05
+logFC_threshold = 1
+
+nonVZ_wt_het_P_up <- dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, 
+                            FDR < fdr_threshold, logFC > logFC_threshold)$gene_name
+nonVZ_wt_het_P_down <- dplyr::filter(wt_het_nonVZ_DE_Litter_Sex_cor, 
+                            FDR < fdr_threshold, logFC < -logFC_threshold)$gene_name
+
+####
+nonVZ_wt_mut_P_up <- dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, 
+                            FDR < fdr_threshold, logFC > logFC_threshold)$gene_name
+nonVZ_wt_mut_P_down <- dplyr::filter(wt_mut_nonVZ_DE_Litter_Sex_cor, 
+                            FDR < fdr_threshold, logFC < -logFC_threshold)$gene_name
+
+
+# Non VZ gene set
+DE_gene_set <- unique(c(nonVZ_wt_het_P_up, nonVZ_wt_het_P_down, nonVZ_wt_mut_P_up, nonVZ_wt_mut_P_down))    
+DE_gene_set <- filter(my_gene, gene_name %in% DE_gene_set)$gene_id
+
+
+rpkm.data <- read.csv("rpkm_log2_54838.csv")
+#rpkm.data_linear <- read.csv("rpkm_linear_54838.csv")    
+
+# Work zone
+rpkm.data$gene_id <- rpkm.data$X
+rownames(rpkm.data) <- rpkm.data$gene_id
+
+heatmap_m <- as.matrix(filter(as.data.frame(rpkm.data), gene_id %in% DE_gene_set)[,2:23])
+
+#pheatmap(heatmap_m)
+
+anno <- df[,c("Genotype", "Cells", "sex.by.rna", "Litter")]
+
+rownames(anno) <- colnames(heatmap_m)
+
+```
+
+
+```{r, fig.width=10, fig.height=8}
+
+#Ordered columns to capture gene modules
+
+pheatmap(heatmap_m[,c(filter(df, Cells == "non_VZ_cells", Genotype == "WT")$Sample,
+                      filter(df, Cells == "non_VZ_cells", Genotype == "Het")$Sample,
+                      filter(df, Cells == "non_VZ_cells", Genotype == "Mut")$Sample)], 
+         show_rownames = FALSE, 
+         cluster_cols = FALSE,
+         clustering_distance_rows="euclidean", 
+         cex=1,
+         clustering_distance_cols="euclidean", 
+         clustering_method="complete", 
+         border_color=FALSE,
+         annotation_col = anno,
+         
+         main = "Non VZ DE genes, FDR < 0.05, logFC > 1 or <-1, scaled by rows [log2 RPKM]",
+         scale = "row")
+
+#dim(heatmap_m)
+
+```
+
+
+```{r}
+
+library(topGO)
+library(org.Mm.eg.db)
+
+source("GO_analysis_PValue.R")
+source("GO_analysis_FDR.R")
+
+
+```
+
+```{r GO_enrichment}
+
+
+#wt_het_nonVZ_Up_GO <- GO_analysis_FDR(wt_het_nonVZ_DE_Litter_Sex_cor, "upregulated", 4007)
+#wt_het_nonVZ_Down_GO <- GO_analysis_FDR(wt_het_nonVZ_DE_Litter_Sex_cor, "downregulated", 4007)
+
+#wt_mut_nonVZ_Up_GO <- GO_analysis_FDR(wt_mut_nonVZ_DE_Litter_Sex_cor, "upregulated", 4007)
+#wt_mut_nonVZ_Down_GO <- GO_analysis_FDR(wt_mut_nonVZ_DE_Litter_Sex_cor, "downregulated", 4007)
+
+#wt_het_nonVZ_Up_GO_P <- GO_analysis_PValue(wt_het_nonVZ_DE_Litter_Sex_cor, "upregulated", 4007)
+#wt_het_nonVZ_Down_GO_P <- GO_analysis_PValue(wt_het_nonVZ_DE_Litter_Sex_cor, "downregulated", 4007)
+
+
+#saveRDS(wt_het_nonVZ_Up_GO, file = "wt_het_nonVZ_Up_GO.RDS")
+#saveRDS(wt_het_nonVZ_Down_GO, file = "wt_het_nonVZ_Down_GO.RDS")
+
+#saveRDS(wt_mut_nonVZ_Up_GO, file = "wt_mut_nonVZ_Up_GO.RDS")
+#saveRDS(wt_mut_nonVZ_Down_GO, file = "wt_mut_nonVZ_Down_GO.RDS")
+
+#saveRDS(wt_het_nonVZ_Up_GO_P, file = "wt_het_nonVZ_Up_GO_P.RDS")
+#saveRDS(wt_het_nonVZ_Down_GO_P, file = "wt_het_nonVZ_Down_GO_P.RDS")
+
+
+
+wt_het_nonVZ_Up_GO <- readRDS("wt_het_nonVZ_Up_GO.RDS")
+wt_het_nonVZ_Down_GO<- readRDS("wt_het_nonVZ_Down_GO.RDS")
+
+wt_mut_nonVZ_Up_GO <- readRDS("wt_mut_nonVZ_Up_GO.RDS")
+wt_mut_nonVZ_Down_GO <- readRDS("wt_mut_nonVZ_Down_GO.RDS")
+
+wt_het_nonVZ_Up_GO_P <- readRDS("wt_het_nonVZ_Up_GO_P.RDS")
+wt_het_nonVZ_Down_GO_P <- readRDS("wt_het_nonVZ_Down_GO_P.RDS")
+
+
+```
+
+
+## 6.1 WT vs Het Upreg. DE GO enr.
+
+At DE FDR < 0.05
+```{r}
+
+datatable(dplyr::filter(wt_het_nonVZ_Up_GO[[1]], classicFisher < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+### 6.1.1 WT vs Het Upreg. DE GO enr.
+
+At DE P < 0.05
+```{r}
+
+datatable(dplyr::filter(wt_het_nonVZ_Up_GO_P[[1]], classicFisher < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+## 6.2 WT vs Het Downreg. DE GO enr.
+
+At DE FDR < 0.05
+```{r}
+
+datatable(dplyr::filter(wt_het_nonVZ_Down_GO[[1]], classicFisher < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+### 6.2.1 WT vs Het Downreg. DE GO enr.
+
+At DE P < 0.05
+```{r}
+
+datatable(dplyr::filter(wt_het_nonVZ_Down_GO_P[[1]], classicFisher < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+## 6.3 WT vs Mut Upreg. DE GO enr.
+
+At DE FDR < 0.05
+```{r}
+
+datatable(dplyr::filter(wt_mut_nonVZ_Up_GO[[1]], classicFisher < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+## 6.4 WT vs Mut Downreg. DE GO enr.
+
+At DE FDR < 0.05
+```{r}
+
+datatable(dplyr::filter(wt_mut_nonVZ_Down_GO[[1]], classicFisher < 0.05), 
+          rownames = FALSE, 
+          filter = list(position = 'top', clear = FALSE, plain = FALSE), 
+          options = list(paging = FALSE, scrollX=T, scrollY="700px", searching = FALSE))
+
+```
+
+
+
+# 7. Manuscript figures
+
+## 7.1 Volcano plots
+
+```{r, fig.width=12, fig.height=8}
+
+# Various batrch corrected DE models #
+
+## Combined
+#wt_het_Cells_Litter_Sex_cor
+#wt_mut_Cells_Litter_Sex_cor
+
+## VZ
+#wt_het_VZ_DE_Litter_Sex_cor
+#wt_mut_VZ_DE_Litter_Sex_cor
+
+
+### nonVZ ###
+#wt_het_nonVZ_DE_Litter_Sex_cor
+#wt_mut_nonVZ_DE_Litter_Sex_cor
+
+### VZ vs nonVZ
+#VZ_vs_nonVZ_DE
+#VZ_vs_nonVZ_DE_WT_samples
+
+# Simple volcano plot
+
+source("volcano_plot.R")
+
+p1 <- plot_grid(
+    volcano_plot(wt_het_Cells_Litter_Sex_cor, "WT vs Het, Combined"),
+    volcano_plot(wt_mut_Cells_Litter_Sex_cor, "WT vs Mut, Combined"), 
+    ncol = 1 
+    )
+
+
+p2 <- plot_grid(
+    volcano_plot(wt_het_VZ_DE_Litter_Sex_cor, "WT vs Het, VZ cells"),
+    volcano_plot(wt_mut_VZ_DE_Litter_Sex_cor, "WT vs Mut, VZ cells"), 
+    ncol = 1 
+    )
+
+
+p3 <- plot_grid(
+    volcano_plot(wt_het_nonVZ_DE_Litter_Sex_cor, "WT vs Het, nonVZ cells"),
+    volcano_plot(wt_mut_nonVZ_DE_Litter_Sex_cor, "WT vs Mut, nonVZ cells"), 
+    ncol = 1
+    )
+
+
+plot_grid(p1, p2, p3, ncol = 3)
+    
+```
+
+## 7.2 Concordance between Het and Mut
+
+```{r}
+
+library(grid)
+library(gridExtra)
+library(cowplot)
+library(Vennerable)
+
+```
+
+
+```{r, eval=FALSE}
+
+two_venn_diag <- function(x, y, title_x, title_y, title, direction){
+
+    if(direction == "up"){
+        a <- filter(x, FDR< 0.05, logFC > 0)$gene_name
+        b <- filter(y, FDR < 0.05, logFC > 0)$gene_name
+    }else{
+        a <- filter(x, FDR< 0.05, logFC < 0)$gene_name
+        b <- filter(y, FDR < 0.05, logFC < 0)$gene_name  
+    }
+
+
+ll <- list(a, b)
+llv <- Venn(ll, SetNames = c(title_x, title_y))
+
+gridExtra::grid.arrange(grid::grid.grabExpr(plot(llv, doWeights = TRUE, type = "circles")), 
+                        top=textGrob(title, gp=gpar(fontsize=18)))
+
+}
+
+
+### Combined
+
+p1 <- plot_grid(
+    
+    two_venn_diag(wt_het_Cells_Litter_Sex_cor, 
+              wt_mut_Cells_Litter_Sex_cor,
+              "WT vs Het",
+              "WT vs Mut",
+              "Combined VZ and nonVZ, Upregulated",
+              "up"
+              ),
+
+
+two_venn_diag(wt_het_Cells_Litter_Sex_cor, 
+              wt_mut_Cells_Litter_Sex_cor,
+              "WT vs Het",
+              "WT vs Mut",
+              "Combined VZ and nonVZ, Downregulated",
+              "down"
+              ),
+    ncol = 1
+)
+
+
+
+### VZ
+p2 <- plot_grid(
+
+two_venn_diag(wt_het_VZ_DE_Litter_Sex_cor, 
+              wt_mut_VZ_DE_Litter_Sex_cor,
+              "WT vs Het",
+              "WT vs Mut",
+              "VZ, Upregulated",
+              "up"
+              ),
+
+two_venn_diag(wt_het_VZ_DE_Litter_Sex_cor, 
+              wt_mut_VZ_DE_Litter_Sex_cor,
+              "WT vs Het",
+              "WT vs Mut",
+              "VZ, Downregulated",
+              "down"
+              ),
+ncol = 1
+
+)
+
+
+
+### nonVZ
+p3 <- plot_grid(
+    two_venn_diag(wt_het_nonVZ_DE_Litter_Sex_cor, 
+              wt_mut_nonVZ_DE_Litter_Sex_cor,
+              "WT vs Het",
+              "WT vs Mut",
+              "nonVZ, Upregulated",
+              "up"
+              ),
+
+two_venn_diag(wt_het_nonVZ_DE_Litter_Sex_cor, 
+              wt_mut_nonVZ_DE_Litter_Sex_cor,
+              "WT vs Het",
+              "WT vs Mut",
+              "nonVZ, Downregulated",
+              "down"
+              ),
+ncol = 1
+)
+
+
+
+plot_grid(p1, p2, p3, ncol = 3)
+
+
+```
+
+## 7.3 DE genes 
+```{r}
+
+VZ_DE_genes <- unique(unlist(sapply(list(
+                    wt_het_VZ_DE_Litter_Sex_cor, wt_mut_VZ_DE_Litter_Sex_cor), 
+                function(x){dplyr::filter(x, FDR < 0.05, logFC > 0.5 | logFC < -0.5)$gene_id})))
+
+
+nonVZ_DE_genes <- unique(unlist(sapply(list(
+                    wt_het_nonVZ_DE_Litter_Sex_cor, wt_mut_nonVZ_DE_Litter_Sex_cor), 
+                function(x){dplyr::filter(x, FDR < 0.05, logFC > 0.5 | logFC < -0.5)$gene_id})))
+
+
+length(VZ_DE_genes)
+length(nonVZ_DE_genes)
+
+
+heatmap_VZ <- as.matrix(filter(as.data.frame(rpkm.data), gene_id %in% VZ_DE_genes)[,2:23])
+heatmap_nonVZ <- as.matrix(filter(as.data.frame(rpkm.data), gene_id %in% nonVZ_DE_genes)[,2:23])
+
+
+anno <- df[,c("Genotype", "Cells", "sex.by.rna", "Litter")]
+rownames(anno) <- df$Sample
+
+
+
+# Custom Sample order:
+VZ_sample_order <- c(
+    filter(df, Cells == "VZ_cells", Genotype == "WT")$Sample,
+    filter(df, Cells == "VZ_cells", Genotype == "Het")$Sample,
+    filter(df, Cells == "VZ_cells", Genotype == "Mut")$Sample
+)
+
+
+nonVZ_sample_order <- c(
+    filter(df, Cells == "non_VZ_cells", Genotype == "WT")$Sample,
+    filter(df, Cells == "non_VZ_cells", Genotype == "Het")$Sample,
+    filter(df, Cells == "non_VZ_cells", Genotype == "Mut")$Sample
+)
+
+
+
+pheatmap(heatmap_VZ[, VZ_sample_order], 
+         show_rownames = FALSE, 
+         clustering_distance_rows="euclidean", 
+         cex=1,
+         cluster_cols = FALSE,
+         #clustering_distance_cols="euclidean", 
+         clustering_method="complete", 
+         border_color=FALSE,
+         annotation_col = anno,
+         main = "VZ DE genes, FDR < 0.05 & abs logFC > 0.5, 119 genes [log2 RPKM]",
+         scale = "row")
+
+
+
+pheatmap(heatmap_nonVZ[, nonVZ_sample_order], 
+         show_rownames = FALSE, 
+         clustering_distance_rows="euclidean", 
+         cex=1,
+         cluster_cols = FALSE,
+         #clustering_distance_cols="euclidean", 
+         clustering_method="complete", 
+         border_color=FALSE,
+         annotation_col = anno,
+         main = "nonVZ DE genes, FDR < 0.05 & abs logFC > 0.5, 586 genes [log2 RPKM]",
+         scale = "row")
+
+```
+
+
+```{r, fig.width=12, fig.height=8}
+
+rpkm_box_plot <- function(x){
+    
+rownames(rpkm.data_linear) <- counts2$gene_name
+    
+rpkm_test <- as.data.frame(reshape2::melt(rpkm.data_linear[x,]))
+rpkm_test <- data.frame(df, "RPKM" = rpkm_test$value)
+
+j_brew_colors <- brewer.pal(n = 8, name = "Paired")[c(6,2)]
+
+
+
+ggplot(rpkm_test, aes(x = Genotype, y= RPKM, colour=Cells))+
+  geom_jitter(size=2, width = 0.2, alpha = 0.5, aes(shape = sex.by.rna))+
+  geom_boxplot(alpha=0, position="identity", size = 0.2)+
+  
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=0, vjust=0.9, hjust=1, size=14))+
+  theme(axis.text.y=element_text(size=12))+
+  theme(axis.title.y=element_text(size=14))+
+  labs(title= x, x="")+
+  theme(plot.title = element_text(size = rel(2), hjust=0.5))+
+  scale_color_manual(values = j_brew_colors)+
+  theme(legend.position = "bottom")+
+    facet_wrap(~Cells)
+
+}
+
+
+
+plot_grid(
+    rpkm_box_plot("Kdm6b"),
+    rpkm_box_plot("Gfap"),
+    rpkm_box_plot("Dlx1"),
+    rpkm_box_plot("Dlx2"),
+    rpkm_box_plot("Dlx5"),
+    rpkm_box_plot("Dlx6"))
+    
+    
+    
+# rpkm_box_plot("Dcx")  # Doublecortin is expressed in neuroblasts. 
+
+ # Proneural genes previously shown to not be regulated by Kdm6b
+#rpkm_box_plot("Ezh2")
+#rpkm_box_plot("Kdm6a")
+#rpkm_box_plot("Ascl1")
+
+
+
+#plot_grid(
+#rpkm_box_plot("Ascl1"), # Pro-neuronal marker
+#rpkm_box_plot("Sox2"))  # Marker of NSCs
+ 
+# Kdm6b dependent genes
+
+#rpkm_box_plot("Myt1")
+#rpkm_box_plot("Slc32a1") 
+#rpkm_box_plot("Gjb6")
+
+
+#rpkm_box_plot("Hes1")
+#rpkm_box_plot("Smad3")
+ 
+```
+
+
+Non-VZ genes
+```{r, fig.width=12, fig.height=8}
+
+
+rpkm_box_plot_nonVZ <- function(x){
+    
+rownames(rpkm.data_linear) <- counts2$gene_name
+    
+rpkm_test <- as.data.frame(reshape2::melt(rpkm.data_linear[x,]))
+rpkm_test <- data.frame(df, "RPKM" = rpkm_test$value)
+
+rpkm_test <- filter(rpkm_test, Cells == "non_VZ_cells", Genotype %in% c("WT", "Mut"))
+
+j_brew_colors <- brewer.pal(n = 8, name = "Paired")[c(2, 6)]
+
+c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00")
+
+ggplot(rpkm_test, aes(x = Genotype, y= RPKM, colour=Genotype))+
+  geom_jitter(size=3, width = 0.2, alpha = 0.5, aes(shape = sex.by.rna))+
+  geom_boxplot(alpha=0, position="identity", size = 0.4)+
+  
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=0, vjust=0.9, hjust=1, size=14))+
+  theme(axis.text.y=element_text(size=12))+
+  theme(axis.title.y=element_text(size=14))+
+  labs(title= x, x="")+
+  theme(plot.title = element_text(size = rel(2), hjust=0.5))+
+  scale_color_manual(values = j_brew_colors)+
+  theme(legend.position = "none")
+ #   facet_wrap(~Cells)
+
+}
+
+plot_grid(
+    rpkm_box_plot_nonVZ("Tbr1"), 
+    rpkm_box_plot_nonVZ("Tle4"),
+    rpkm_box_plot_nonVZ("Bcl11b"),
+    rpkm_box_plot_nonVZ("Cux2"),
+    rpkm_box_plot_nonVZ("Fezf2"),
+    rpkm_box_plot_nonVZ("Ppp1r1b"),
+    rpkm_box_plot_nonVZ("Grin2b"),
+    rpkm_box_plot_nonVZ("Neurod2")
+) 
+
+
+
+
+#rpkm_box_plot_nonVZ("Kdm6b")
+
+```
+ 
+
+
+
+
+
+## 7.4 Gene box plots
+```{r}
+
+
+
+# Load the work space
+#load("G:/Shared drives/Nord Lab - Computational Projects/Kdm6b_bulk_RNAseq/rpkm_gene_plotting_workspace_temp.RData")
+
+df$Cells <- factor(df$Cells, levels = c("VZ_cells", "non_VZ_cells"))
+df$sex.by.rna <- factor(df$sex.by.rna, levels = c("M", "F"))
+
+```
+
+```{r, fig.width=12, fig.height=8}
+
+rpkm_box_plot_wt_mut <- function(x){
+    
+    #x = "Kdm6b"
+    #y = "Kdm6b"
+    
+rownames(rpkm.data_linear) <- counts2$gene_name
+    
+rpkm_test <- as.data.frame(reshape2::melt(rpkm.data_linear[x,]))
+rpkm_test <- data.frame(df, "RPKM" = rpkm_test$value)
+
+j_brew_colors <- brewer.pal(n = 8, name = "Paired")[c(2,6)]
+
+
+
+ggplot(filter(rpkm_test, Genotype %in% c("WT", "Mut")), aes(x = Genotype, y= RPKM, colour=Genotype))+
+  geom_jitter(size=2, width = 0.2, alpha = 0.5, aes(shape = sex.by.rna))+
+  geom_boxplot(alpha=0, position="identity", size = 0.2)+
+  
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=0, vjust=0.9, hjust=0.5, size=14))+
+  theme(axis.text.y=element_text(size=12))+
+  theme(axis.title.y=element_text(size=14))+
+  labs(title= x, x="")+
+  theme(plot.title = element_text(size = rel(2), hjust=0.5))+
+  scale_color_manual(values = j_brew_colors)+
+  theme(legend.position = "none")+
+    facet_wrap(~Cells)
+
+}
+
+genes_to_plot <- c("Eomes", "Tbr1", "Tle4", "Cux2", "Kdm6b", 
+                   "Sox2", "Dmrta1", "Id4", "Neurod2", "Neurog1", 
+                   "Bcl11b", "Dmrta2", "Fezf2", "Slc17a6", "Sybu", 
+                   "Grin2b", "Nav2", "Hey1", "Hes1", "Pax6")
+
+library(tidyverse)
+
+
+pl <- lapply(genes_to_plot, function(x) rpkm_box_plot_wt_mut(x))
+
+plot_grid(plotlist = pl)
+
+#ggsave(plot_grid(plotlist = pl), filename = "./exported_figures/genes_1.png", width = 14, height = 12)
+#ggsave(plot_grid(plotlist = pl), filename = "./exported_figures/genes_1.svg", width = 14, height = 12)
+
+```
+
+```{r, fig.width=12, fig.height=8}
+
+genes_to_plot <- c("Auts2", "Lhx2", "Jmjd1c", "Kdm2a", 
+                   "Kdm3a", "Kdm4c", "Kdm6a", "Ank3", 
+                   "Nrxn2", "Ntrk2", "Scn1b", "Shank1")
+
+
+pl <- lapply(genes_to_plot, function(x) rpkm_box_plot_wt_mut(x))
+
+#pl
+
+plot_grid(plotlist = pl)
+
+#ggsave(plot_grid(plotlist = pl), filename = "./exported_figures/genes_2.png", width = 14, height = 12)
+#ggsave(plot_grid(plotlist = pl), filename = "./exported_figures/genes_2.svg", width = 14, height = 12)
+
+#ggsave(plot_grid(plotlist = pl), filename = "./exported_figures/genes_2_noLegend.png", width = 14, height = 12)
+#ggsave(plot_grid(plotlist = pl), filename = "./exported_figures/genes_2_noLegend.svg", width = 14, height = 12)
+
+
+```
+
+
+
+
+
+
